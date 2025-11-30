@@ -1,2 +1,3 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/VapeVoidware/VW-Add/main/nightsintheforest.lua", true))()
 loadstring(game:HttpGet("https://raw.githubusercontent.com/wehibuyfgyuwe/99nights.github.io/refs/heads/main/ringta.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/rblxscriptsdotnet/roblox-scripts/refs/heads/main/Auto%20Loot%20Chests%20and%20Bring%20Items"))()
