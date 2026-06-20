@@ -1,17 +1,40 @@
 -- ============================================
--- DELTA FLY SCRIPT - FIXED FOR PRIVATE SERVER
+-- DELTA FLY SCRIPT - UNIVERSAL (R6 & R15)
 -- Support: Delta Mobile / PC
 -- ============================================
 
 local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
-local rootPart = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+
+-- ============================================
+-- DETEKSI R6 vs R15
+-- ============================================
+local isR6 = humanoid.RigType == Enum.HumanoidRigType.R6
+local isR15 = humanoid.RigType == Enum.HumanoidRigType.R15
+
+local rootPart = nil
+
+if isR6 then
+    -- R6: pake Torso
+    rootPart = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+elseif isR15 then
+    -- R15: pake HumanoidRootPart
+    rootPart = character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Fallback: cari apapun yang bisa dipakai
+if not rootPart then
+    rootPart = character.PrimaryPart or character:FindFirstChildWhichIsA("BasePart")
+end
 
 if not rootPart then
-    warn("Tidak menemukan HumanoidRootPart!")
+    warn("❌ Tidak menemukan root part untuk karakter!")
     return
 end
+
+print("✅ Detected Rig:", isR6 and "R6" or "R15")
+print("✅ Root Part:", rootPart.Name)
 
 -- ============================================
 -- KONFIGURASI
@@ -28,21 +51,23 @@ local CONFIG = {
 }
 
 -- ============================================
--- FLY MANAGER (Versi Improved)
+-- FLY MANAGER (Universal)
 -- ============================================
 local FlyManager = {}
 FlyManager.__index = FlyManager
 
-function FlyManager.new(player, character, rootPart, humanoid)
+function FlyManager.new(player, character, rootPart, humanoid, rigType)
     local self = setmetatable({}, FlyManager)
     self.player = player
     self.character = character
     self.rootPart = rootPart
     self.humanoid = humanoid
+    self.rigType = rigType -- "R6" atau "R15"
     self.enabled = false
     self.speed = CONFIG.defaultSpeed
     self.bodyVelocity = nil
     self.bodyGyro = nil
+    self.fallbackMethod = false -- Gunakan CFrame jika Velocity gagal
     return self
 end
 
@@ -62,12 +87,12 @@ function FlyManager:enable()
     self.humanoid.AutoRotate = false
     self.humanoid.Sit = false
     
-    -- Ambil alih network ownership (PENTING untuk server sendiri)
+    -- Ambil alih network ownership
     if self.rootPart then
         self.rootPart:SetNetworkOwner(self.player)
     end
     
-    -- Matikan collision semua part agar tidak nabrak
+    -- Matikan collision semua part
     for _, part in pairs(self.character:GetDescendants()) do
         if part:IsA("BasePart") then
             part.CanCollide = false
@@ -75,9 +100,32 @@ function FlyManager:enable()
         end
     end
     
-    -- BodyVelocity dengan force lebih besar
+    -- === KHUSUS R6: handle torso ===
+    if self.rigType == "R6" then
+        -- R6 butuh perlakuan khusus
+        local torso = self.rootPart
+        if torso then
+            -- Matikan physics constraint R6
+            for _, constraint in pairs(torso:GetChildren()) do
+                if constraint:IsA("Motor6D") or constraint:IsA("Motor") then
+                    constraint.Enabled = false
+                end
+            end
+        end
+    end
+    
+    -- === KHUSUS R15: handle HumanoidRootPart ===
+    if self.rigType == "R15" then
+        -- R15 lebih stabil, tapi tetap kita handle
+        local hrp = self.rootPart
+        if hrp then
+            hrp.Anchored = false
+        end
+    end
+    
+    -- BodyVelocity (Method 1)
     self.bodyVelocity = Instance.new("BodyVelocity")
-    self.bodyVelocity.MaxForce = Vector3.new(99999, 99999, 99999) -- Force besar
+    self.bodyVelocity.MaxForce = Vector3.new(99999, 99999, 99999)
     self.bodyVelocity.Velocity = Vector3.new(0, 0, 0)
     self.bodyVelocity.Parent = self.rootPart
     
@@ -87,7 +135,10 @@ function FlyManager:enable()
     self.bodyGyro.CFrame = self.rootPart.CFrame
     self.bodyGyro.Parent = self.rootPart
     
-    print("✅ Fly: ON")
+    -- Reset fallback
+    self.fallbackMethod = false
+    
+    print("✅ Fly: ON (" .. self.rigType .. ")")
 end
 
 function FlyManager:disable()
@@ -110,13 +161,45 @@ function FlyManager:disable()
         end
     end
     
+    -- Kembalikan constraint R6
+    if self.rigType == "R6" and self.rootPart then
+        for _, constraint in pairs(self.rootPart:GetChildren()) do
+            if constraint:IsA("Motor6D") or constraint:IsA("Motor") then
+                constraint.Enabled = true
+            end
+        end
+    end
+    
     print("❌ Fly: OFF")
 end
 
 function FlyManager:update(direction)
-    if not self.enabled or not self.bodyVelocity then return end
-    -- Terapkan velocity dengan force besar
-    self.bodyVelocity.Velocity = direction * self.speed
+    if not self.enabled then return end
+    
+    local targetVelocity = direction * self.speed
+    
+    -- Method 1: BodyVelocity
+    if self.bodyVelocity and not self.fallbackMethod then
+        self.bodyVelocity.Velocity = targetVelocity
+        
+        -- Cek apakah bergerak (jika tidak, pindah ke fallback)
+        wait(0.1) -- Tunggu sebentar
+        local currentVel = self.rootPart.Velocity
+        if targetVelocity.Magnitude > 0 and currentVel.Magnitude < 1 then
+            self.fallbackMethod = true
+            print("⚠️ Beralih ke fallback method (CFrame)")
+        end
+    end
+    
+    -- Method 2: CFrame (fallback)
+    if self.fallbackMethod then
+        if targetVelocity.Magnitude > 0 then
+            self.rootPart.CFrame = self.rootPart.CFrame + targetVelocity * 0.1
+        end
+        -- Tetap pakai velocity juga
+        self.rootPart.Velocity = targetVelocity
+        self.rootPart.AssemblyLinearVelocity = targetVelocity
+    end
 end
 
 function FlyManager:updateRotation(cframe)
@@ -397,15 +480,18 @@ end
 -- MAIN EXECUTION
 -- ============================================
 local function main()
-    local flyManager = FlyManager.new(player, character, rootPart, humanoid)
+    local rigType = isR6 and "R6" or "R15"
+    
+    local flyManager = FlyManager.new(player, character, rootPart, humanoid, rigType)
     local guiManager = GUIManager.new(player, flyManager)
     local inputHandler = InputHandler.new(flyManager, guiManager)
     
     guiManager:create()
     inputHandler:start()
     
-    print("✅ Delta Fly Script (Fixed) loaded successfully!")
+    print("✅ Delta Fly Script (Universal) loaded!")
     print("🔑 Press F to toggle fly")
+    print("🦴 Detected Rig:", rigType)
     print("📱 GUI available on screen")
 end
 
